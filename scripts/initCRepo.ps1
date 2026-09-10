@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)]
     [string]$initDir
 )
@@ -8,7 +8,7 @@ git init $initDir
 New-Item -ItemType Directory -Path (
     (Join-Path $initDir "includes"),
     (Join-Path $initDir "src"),
-    (Join-Path $initDir "tests")
+    (Join-Path $initDir "tests"),
     (Join-Path $initDir "bin")
 ) -Force | Out-Null
 
