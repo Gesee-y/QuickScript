@@ -2,6 +2,7 @@
  # ############################################################################ TAGS GENERATOR ########################################################################## #
 # ###################################################################################################################################################################### #
 
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 import os
@@ -21,27 +22,31 @@ class TagIncoherence:
 #
 @dataclass
 class TagNode:
-	id: int = -1
+	id: int
 	children: set[int]
 
 #
 @dataclass
 class TagGraph:
-	nodes: list[TagNode] = [TagNode(id=0, children={})]
-	node_to_id: dict[str, int] = {"": 0}
+	nodes: list[TagNode]
+	node_to_id: dict[str, int]
+
+def newTagGraph() -> TagGraph:
+	return TagGraph(nodes=[TagNode(id=0, children=set())], node_to_id={"": 0})
 
 def add_node(tree: TagGraph, parent: int, name: str) -> int:
-	cid = tree.get(name, -1)
+	cid = tree.node_to_id.get(name, -1)
 
 	if cid < 0:
 		cid = len(tree.nodes)	
-		tree.nodes.append(TagNode(id=cid, children={}))
+		tree.nodes.append(TagNode(id=cid, children=set()))
+		tree.node_to_id[name] = cid
 	
 	tree.nodes[parent].children.add(cid)
 	return cid
 
 def fetch_tags(path: str) -> TagGraph:
-    result = TagGraph()
+    result = newTagGraph()
     path_to_id: dict[str, int] = {path: 0}
 
     for root, subfolders, _ in os.walk(path):
@@ -96,6 +101,7 @@ def validate_tags(
                 TagIncoherence(
                     kind=IncoherenceKind.UNKNOWN_TAG,
                     name=tag_name,
+                    from_tag="",
                     possible_path=[],
                 )
             )
@@ -120,6 +126,7 @@ def validate_tags(
                     TagIncoherence(
                         kind=IncoherenceKind.INCOMPLETE_PATH,
                         name=tag_name,
+                        from_tag="",
                         possible_path=possible_path,
                     )
                 )
