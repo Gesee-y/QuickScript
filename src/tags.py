@@ -23,6 +23,7 @@ class TagIncoherence:
 @dataclass
 class TagNode:
     id: int
+    name: str
     parent: int
     children: set[int]
 
@@ -38,14 +39,14 @@ class SuggestionResult:
     ambiguious_tags: list[str]
 
 def newTagGraph() -> TagGraph:
-	return TagGraph(nodes=[TagNode(id=0, parent=-1, children=set())], node_to_id={"": 0})
+	return TagGraph(nodes=[TagNode(id=0, name="", parent=-1, children=set())], node_to_id={"": 0})
 
 def add_node(tree: TagGraph, parent: int, name: str) -> int:
 	cid = tree.node_to_id.get(name, -1)
 
 	if cid < 0:
 		cid = len(tree.nodes)	
-		tree.nodes.append(TagNode(id=cid, parent=parent, children=set()))
+		tree.nodes.append(TagNode(id=cid, name=name, parent=parent, children=set()))
 		tree.node_to_id[name] = cid
 	
 	tree.nodes[parent].children.add(cid)
@@ -166,60 +167,89 @@ def sort_tags(tags: TagGraph, data: list[str]):
     data.sort(key = lambda d: get_depth(tags, d))
 
 
-def build_suggestion(tags: TagGraph, data: dict[str, float]) -> SuggestionResult:
-    # Inverse map: ID -> Tag Name
-    id_to_name: dict[int, str] = {v: k for k, v in tags.node_to_id.items()}
-    
-    # 1. Compute dynamic programming scores and optimal paths to each node
-    # best_score[node_id] = maximum total score from root to node_id
-    best_score: dict[int, float] = {0: 0.0}
-    # best_path[node_id] = list of tag names forming the path from root to node_id
-    best_path: dict[int, list[str]] = {0: []}
-    
-    # Process nodes in order of depth to ensure parents are evaluated before children
-    sorted_node_ids = sorted(range(len(tags.nodes)), key=lambda nid: get_depth(tags, id_to_name[nid]))
+def get_path_as_name(tags: TagGraph, node_id: int) -> list[str]:
+    cid = node_id
+    path: list[str] = []
 
-    for nid in sorted_node_ids:
-        if nid == 0:
-            continue
-            
-        parent_id = tags.nodes[nid].parent
-        node_name = id_to_name[nid]
-        score = data.get(node_name, 0.0)
+    while cid != 0:
+        path.append(tags.nodes[cid].name)
+        cid = tags.nodes[cid].parent
+
+    return path
+
+def get_path_as_id(tags: TagGraph, node_id: int) -> list[int]:
+    cid = node_id
+    path: list[int] = []
+
+    while cid != 0:
+        path.append(cid)
+        cid = tags.nodes[cid].parent
+
+    return path
+
+def get_path_score(tags: TagGraph, node_id: int, tag_scores: dict[str, float]) -> float:
+    cid = node_id
+    score = 0.0
+
+    while cid != 0:
+        t = tags.nodes[cid].name
+        score += tag_scores.get(t, 0.0)
+        cid = tags.nodes[cid].parent
+
+    return score
         
-        # Cumulative score from root to this node
-        best_score[nid] = best_score[parent_id] + score
-        best_path[nid] = best_path[parent_id] + [node_name]
+def build_suggestion(tags: TagGraph, data: dict[str, float]) -> list[SuggestionResult]:
+    # Cumulative branch scores from node to subtree leaves
+    best_score: dict[int, float] = {}
+    data_tags = list(data.keys())
+    max_score = 0.0
 
-    # 2. Identify leaf nodes (nodes with no children)
-    leaf_ids = [nid for nid, node in enumerate(tags.nodes) if not node.children]
-    
-    if not leaf_ids:
-        # Fallback if graph only contains root
-        return SuggestionResult(result=[], ambiguious_tags=[])
+    for t in data_tags:
+        nid = tags.node_to_id[t]
+        node_score = get_path_score(tags, nid, data)
+        best_score[nid] = node_score
 
-    # 3. Find the maximum score among all leaf paths
-    max_score = max(best_score[leaf_id] for leaf_id in leaf_ids)
-    
-    # Collect all leaf nodes achieving the highest score
-    best_leaf_ids = [leaf_id for leaf_id in leaf_ids if best_score[leaf_id] == max_score]
+        if node_score > max_score:
+            max_score = node_score
 
-    # 4. Construct the primary path result
-    # Pick the first best path (excluding root label if empty "")
-    chosen_path = best_path[best_leaf_ids[0]]
-    
-    # 5. Extract ambiguous tags across tied paths (tags with 0 score)
+    # If there is no node or no high enough score
+    if max_score == 0.0:
+        return []
+
+    best_path_ids = [leaf_id for leaf_id in best_score.keys() if best_score[leaf_id] == max_score]
     ambiguous_set: set[str] = set()
-    
-    if len(best_leaf_ids) > 1:
-        for leaf_id in best_leaf_ids:
-            path_tags = best_path[leaf_id]
+
+    if len(best_path_ids) > 1:
+        for leaf_id in best_path_ids:
+            path_tags = get_path_as_name(tags, leaf_id)
             for tag in path_tags:
                 # Include zero-score tags that create ambiguity between max-scoring paths
                 if data.get(tag, 0.0) == 0.0:
                     ambiguous_set.add(tag)
 
-    return SuggestionResult(
-        result=chosen_path,
-        ambiguious_tags=list(ambiguous_set)
-    )
+        if len(ambiguous_set) > 0:
+            chosen_path = get_path_as_name(tags, best_path_ids[0])
+        
+            return [SuggestionResult(
+                result=chosen_path,
+                ambiguious_tags=list(ambiguous_set)
+            )]
+
+    # 2. Identify leaf nodes (nodes with no children)
+    leaf_ids = [nid for nid in best_path_ids if not tags.nodes[nid].children]
+    subtree_ids = [nid for nid in best_path_ids if tags.nodes[nid].children]
+    
+    # If there is leaf and subtreem we take the subtree since it have an higher ambiguity
+    if subtree_ids:
+        subtree = subtree_ids[0]
+
+        for nid in tags.nodes[subtree].children:
+            ambiguous_set.add(tags.nodes[nid].name)
+
+        return [SuggestionResult(result=get_path_as_name(tags, subtree), ambiguious_tags=list(ambiguous_set))]
+
+    result: list[SuggestionResult] = []
+    for leaf_id in leaf_ids:
+        result.append(SuggestionResult(result=get_path_as_name(tags, leaf_id), ambiguious_tags=[]))
+
+    return result
