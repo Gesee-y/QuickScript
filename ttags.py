@@ -1,8 +1,6 @@
 import unittest
 from src.tags import (
     IncoherenceKind,
-    TagGraph,
-    TagIncoherence,
     newTagGraph,
     add_node,
     validate_tags,
